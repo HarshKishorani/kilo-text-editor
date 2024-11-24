@@ -7,6 +7,21 @@
 #include <stdio.h>
 #include <errno.h>
 
+/*** defines ***/
+
+/*
+    The 'CTRL_KEY' macro bitwise-ANDs a character with the value 00011111, in binary.
+    (In C, you generally specify bitmasks using hexadecimal, since C doesn’t have binary literals, and hexadecimal is more concise and
+    readable once you get used to it.)
+
+    In other words, it sets the upper 3 bits of the character to 0.
+    This mirrors what the Ctrl key does in the terminal: it strips bits 5 and 6 from whatever key you press in combination with Ctrl,
+    and sends that.
+    (By convention, bit numbering starts from 0.) The ASCII character set seems to be designed this way on purpose.
+    (It is also similarly designed so that you can set and clear bit 5 to switch between lowercase and uppercase.)
+*/
+#define CTRL_KEY(k) ((k) & 0x1f)
+
 /*** data ***/
 
 struct termios orig_termios;
@@ -16,6 +31,10 @@ struct termios orig_termios;
 /// @brief Function that prints an error message and exits the program.
 void die(const char *s)
 {
+    // Clear the screen on exit
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+    write(STDOUT_FILENO, "\x1b[H", 3);
+
     /*
         Most C library functions that fail will set the global errno variable to indicate what the error was.
         perror() looks at the global errno variable and prints a descriptive error message for it.
@@ -96,6 +115,65 @@ void enableRawMode()
         die("tcsetattr");
 }
 
+/// @brief Wait for one keypress, and return it.
+char editorReadKey()
+{
+    int nread;
+    char c;
+    while ((nread = read(STDIN_FILENO, &c, 1)) != 1)
+    {
+        if (nread == -1 && errno != EAGAIN)
+            die("read");
+    }
+    return c;
+}
+
+/*** output ***/
+
+void editorRefreshScreen()
+{
+    /*
+        Write 4 bytes to the terminal.
+        1st byte is '\x1b' which is the escape character, or 27 in decimal.
+        The other three bytes are '[2J'.
+
+        Escape sequences always start with an escape character (27) followed by a [ character.
+        Escape sequences instruct the terminal to do various text formatting tasks, such as coloring text, moving the cursor around, and clearing parts of the screen.
+
+        We are using the J command (Erase In Display) to clear the screen.
+
+        Escape sequence commands take arguments, which come before the command.
+        In this case the argument is 2, which says to clear the entire screen.
+        <esc>[1J would clear the screen up to where the cursor is, and <esc>[0J would clear the screen from the cursor up to the end of the screen.
+        Also, 0 is the default argument for J, so just <esc>[J by itself would also clear the screen from the cursor to the end.
+
+        Here we will be using VT100 Escape sequences : http://vt100.net/docs/vt100-ug/chapter3.html
+        We can also use ncurses : https://en.wikipedia.org/wiki/Ncurses
+    */
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+
+    write(STDOUT_FILENO, "\x1b[H", 3); // Reposition it at the top-left corner so that we’re ready to draw the editor interface from top to bottom.
+}
+
+/*** input ***/
+
+/// @brief Wait for a keypress, and then handle it.
+void editorProcessKeypress()
+{
+    char c = editorReadKey();
+
+    switch (c)
+    {
+    case CTRL_KEY('q'):
+        // Clear the screen on exit
+        write(STDOUT_FILENO, "\x1b[2J", 4);
+        write(STDOUT_FILENO, "\x1b[H", 3);
+        
+        exit(0);
+        break;
+    }
+}
+
 /*** init ***/
 
 int main()
@@ -104,23 +182,8 @@ int main()
 
     while (1)
     {
-        char c = '\0';
-        if (read(STDIN_FILENO, &c, 1) == -1 && errno != EAGAIN)
-            die("read");
-
-        // iscntrl() tests whether a character is a control character.
-        // Control characters are nonprintable characters that we don’t want to print to the screen.
-        if (iscntrl(c))
-        {
-            printf("%d\r\n", c);
-        }
-        else
-        {
-            printf("%d ('%c')\r\n", c, c); // We are using "\r\n" because we turn off "output processing features" for terminal using "OPOST".
-        }
-
-        if (c == 'q')
-            break;
+        editorRefreshScreen();
+        editorProcessKeypress();
     }
 
     return 0;
