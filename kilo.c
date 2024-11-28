@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <errno.h>
+#include <sys/ioctl.h>
 
 /*** defines ***/
 
@@ -24,7 +25,13 @@
 
 /*** data ***/
 
-struct termios orig_termios;
+struct editorConfig
+{
+    int screenrows;
+    int screencols;
+    struct termios orig_termios;
+};
+struct editorConfig E;
 
 /*** terminal ***/
 
@@ -47,7 +54,7 @@ void die(const char *s)
 /// @brief Restore original terminal attributes when progeam exits.
 void disableRawMode()
 {
-    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios) == -1)
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios) == -1)
         die("tcsetattr");
 }
 
@@ -60,12 +67,12 @@ void enableRawMode()
         (2) modifying the struct by hand
         (3) passing the modified struct to tcsetattr() to write the new terminal attributes back out.
     */
-    if (tcgetattr(STDIN_FILENO, &orig_termios) == -1) // Get current Terminal attributes
+    if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) // Get current Terminal attributes
         die("tcgetattr");
 
     // register our disableRawMode() function to be called automatically when the program exits, whether it exits by returning from main(), or by calling the exit() function
     atexit(disableRawMode);
-    struct termios raw = orig_termios;
+    struct termios raw = E.orig_termios;
 
     /*
         By default your terminal starts in canonical mode, also called cooked mode.
@@ -128,7 +135,79 @@ char editorReadKey()
     return c;
 }
 
+int getCursorPosition(int *rows, int *cols)
+{
+    char buf[32];
+    unsigned int i = 0;
+    /*
+        The n command (Device Status Report) can be used to query the terminal for status information.
+        We want to give it an argument of 6 to ask for the cursor position.
+    */
+    if (write(STDOUT_FILENO, "\x1b[6n", 4) != 4)
+        return -1;
+    while (i < sizeof(buf) - 1)
+    {
+        // Read response of n command in a buffer to parse it. The respnse will be something like \x1b[48;53R. Representing the cursor position
+        if (read(STDIN_FILENO, &buf[i], 1) != 1)
+            break;
+        if (buf[i] == 'R')
+            break;
+        i++;
+    }
+    buf[i] = '\0';
+
+    // Read these values in the rows and cols
+    if (buf[0] != '\x1b' || buf[1] != '[')
+        return -1;
+    if (sscanf(&buf[2], "%d;%d", rows, cols) != 2)
+        return -1;
+    return 0;
+}
+
+int getWindowSize(int *rows, int *cols)
+{
+    struct winsize ws;
+    // Get the size of the terminal by simply calling ioctl() with the TIOCGWINSZ request.
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0)
+    {
+        /*
+            ioctl() isn’t guaranteed to be able to request the window size on all systems,
+            so we are going to provide a fallback method of getting the window size.
+
+            The strategy is to position the cursor at the bottom-right of the screen, then use escape sequences that let us query the position of the cursor.
+            That tells us how many rows and columns there must be on the screen.
+
+            We are sending two escape sequences one after the other.
+            The C command (Cursor Forward) moves the cursor to the right, and the B command (Cursor Down) moves the cursor down.
+            The argument says how much to move it right or down by.
+            We use a very large value, 999, which should ensure that the cursor reaches the right and bottom edges of the screen.
+        */
+        if (write(STDOUT_FILENO, "\x1b[999C\x1b[999B", 12) != 12)
+            return -1;
+        return getCursorPosition(rows, cols);
+    }
+    else
+    {
+        *cols = ws.ws_col;
+        *rows = ws.ws_row;
+        return 0;
+    }
+}
+
 /*** output ***/
+
+void editorDrawRows()
+{
+    int y;
+    for (y = 0; y < E.screenrows; y++)
+    {
+        write(STDOUT_FILENO, "~", 1);
+        if (y < E.screenrows - 1)
+        {
+            write(STDOUT_FILENO, "\r\n", 2);
+        }
+    }
+}
 
 void editorRefreshScreen()
 {
@@ -153,6 +232,10 @@ void editorRefreshScreen()
     write(STDOUT_FILENO, "\x1b[2J", 4);
 
     write(STDOUT_FILENO, "\x1b[H", 3); // Reposition it at the top-left corner so that we’re ready to draw the editor interface from top to bottom.
+
+    editorDrawRows();
+    
+    write(STDOUT_FILENO, "\x1b[H", 3); // Reposition it at the top-left corner so that we’re ready to draw the editor interface from top to bottom.
 }
 
 /*** input ***/
@@ -168,7 +251,7 @@ void editorProcessKeypress()
         // Clear the screen on exit
         write(STDOUT_FILENO, "\x1b[2J", 4);
         write(STDOUT_FILENO, "\x1b[H", 3);
-        
+
         exit(0);
         break;
     }
@@ -176,9 +259,16 @@ void editorProcessKeypress()
 
 /*** init ***/
 
+void initEditor()
+{
+    if (getWindowSize(&E.screenrows, &E.screencols) == -1)
+        die("getWindowSize");
+}
+
 int main()
 {
     enableRawMode();
+    initEditor();
 
     while (1)
     {
