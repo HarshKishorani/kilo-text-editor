@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <string.h>
 #include <errno.h>
 #include <sys/ioctl.h>
 
@@ -194,17 +195,56 @@ int getWindowSize(int *rows, int *cols)
     }
 }
 
+/*** append buffer ***/
+
+// Create our own dynamic string type that supports one operation: appending.
+struct abuf
+{
+    char *b;
+    int len;
+};
+
+#define ABUF_INIT {NULL, 0}
+
+/// @brief To append a string s to an abuf
+/// @param ab Buffer to append the string onto.
+/// @param s The String to append.
+/// @param len Length of the new string to append in buffer.
+void abAppend(struct abuf *ab, const char *s, int len)
+{
+    char *new = realloc(ab->b, ab->len + len); // Create a new buffer of size (afub.len + len) and contents of abuf
+    if (new == NULL)
+        return;
+    memcpy(&new[ab->len], s, len); // Copy contents of s to to new[ab.len].
+    ab->b = new;                   // Make abuf point the new buffer created.
+    ab->len += len;
+}
+
+/// @brief Deallocates the dynamic memory used by an abuf.
+void abFree(struct abuf *ab)
+{
+    free(ab->b);
+}
+
 /*** output ***/
 
-void editorDrawRows()
+void editorDrawRows(struct abuf *ab)
 {
     int y;
     for (y = 0; y < E.screenrows; y++)
     {
-        write(STDOUT_FILENO, "~", 1);
+        abAppend(ab, "~", 1);
+
+        /*
+            The K command (Erase In Line) erases part of the current line.
+            Its argument is analogous to the J command’s argument: 2 erases the whole line, 1 erases the part of the line to the left of the cursor, and 0 erases the part of the line to the right of the cursor.
+            0 is the default argument, and that’s what we want, so we leave out the argument and just use <esc>[K
+        */
+        abAppend(ab, "\x1b[K", 3);
+        
         if (y < E.screenrows - 1)
         {
-            write(STDOUT_FILENO, "\r\n", 2);
+            abAppend(ab, "\r\n", 2);
         }
     }
 }
@@ -212,6 +252,8 @@ void editorDrawRows()
 void editorRefreshScreen()
 {
     /*
+        Intro to Escape Sequences. Consider an example : ("\x1b[2J", 4)
+
         Write 4 bytes to the terminal.
         1st byte is '\x1b' which is the escape character, or 27 in decimal.
         The other three bytes are '[2J'.
@@ -229,13 +271,19 @@ void editorRefreshScreen()
         Here we will be using VT100 Escape sequences : http://vt100.net/docs/vt100-ug/chapter3.html
         We can also use ncurses : https://en.wikipedia.org/wiki/Ncurses
     */
-    write(STDOUT_FILENO, "\x1b[2J", 4);
+    struct abuf ab = ABUF_INIT;
 
-    write(STDOUT_FILENO, "\x1b[H", 3); // Reposition it at the top-left corner so that we’re ready to draw the editor interface from top to bottom.
+    abAppend(&ab, "\x1b[?25l", 6); // Hide the cursor.
 
-    editorDrawRows();
-    
-    write(STDOUT_FILENO, "\x1b[H", 3); // Reposition it at the top-left corner so that we’re ready to draw the editor interface from top to bottom.
+    abAppend(&ab, "\x1b[H", 3); // Reposition it at the top-left corner so that we’re ready to draw the editor interface from top to bottom.
+
+    editorDrawRows(&ab);
+
+    abAppend(&ab, "\x1b[H", 3);    // Reposition it at the top-left corner so that we’re ready to draw the editor interface from top to bottom.
+    abAppend(&ab, "\x1b[?25h", 6); // Reset the cursor (Display it back).
+
+    write(STDOUT_FILENO, ab.b, ab.len); // Write the whole buffer onto the terminal instead of using multiple write statements.
+    abFree(&ab);
 }
 
 /*** input ***/
