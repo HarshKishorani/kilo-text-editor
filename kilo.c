@@ -1,5 +1,11 @@
 /*** includes ***/
 
+// Feature test macro : https://www.gnu.org/software/libc/manual/html_node/Feature-Test-Macros.html
+// We add them above our includes, because the header files we’re including use the macros to decide what features to expose.
+#define _DEFAULT_SOURCE
+#define _BSD_SOURCE
+#define _GNU_SOURCE
+
 #include <termios.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -8,6 +14,7 @@
 #include <string.h>
 #include <errno.h>
 #include <sys/ioctl.h>
+#include <sys/types.h>
 
 /*** defines ***/
 
@@ -41,9 +48,18 @@ enum editorKey
 
 /*** data ***/
 
+/// @brief Data type for storing a row of text in our editor.
+typedef struct erow
+{
+    int size;
+    char *chars;
+} erow;
+
 struct editorConfig
 {
     int cx, cy; // Cursor co-ordinates
+    int numrows;
+    erow *row;
     int screenrows;
     int screencols;
     struct termios orig_termios;
@@ -144,7 +160,7 @@ int editorReadKey()
 {
     int nread;
     char c;
-    
+
     // Read in char c
     while ((nread = read(STDIN_FILENO, &c, 1)) != 1)
     {
@@ -153,7 +169,7 @@ int editorReadKey()
     }
 
     // If we read the escape character => special key press
-    if (c == '\x1b') 
+    if (c == '\x1b')
     {
         // Read next 2 chars (bytes)
         char seq[3];
@@ -286,6 +302,53 @@ int getWindowSize(int *rows, int *cols)
     }
 }
 
+/*** row operations ***/
+
+/// @brief Allocate space for a new erow, and then copy the given string to a new erow at the end of the E.row array.
+/// @param s String to append to the row.
+/// @param len Length of the string to append.
+void editorAppendRow(char *s, size_t len)
+{
+    E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+    int at = E.numrows;
+    E.row[at].size = len;
+    E.row[at].chars = malloc(len + 1);
+    memcpy(E.row[at].chars, s, len);
+    E.row[at].chars[len] = '\0';
+    E.numrows++;
+}
+
+/*** file i/o ***/
+
+/// @brief Opening and Reading a file from disk
+void editorOpen(char *filename)
+{
+    FILE *fp = fopen(filename, "r");
+    if (!fp)
+        die("fopen");
+
+    char *line = NULL;
+    size_t linecap = 0;
+    ssize_t linelen;
+
+    /*
+        getline() is useful for reading lines from a file when we don’t know how much memory to allocate for each line.
+        It takes care of memory management for you. First, we pass it a null line pointer and a linecap (line capacity) of 0.
+        That makes it allocate new memory for the next line it reads, and set line to point to the memory, and set linecap to let you know how much memory it allocated.
+        Its return value is the length of the line it read, or -1 if it’s at the end of the file and there are no more lines to read.
+    */
+    while ((linelen = getline(&line, &linecap, fp)) != -1)
+    {
+        while (linelen > 0 && (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
+        {
+            linelen--;
+        }
+        editorAppendRow(line, linelen);
+    }
+    free(line);
+    fclose(fp);
+}
+
 /*** append buffer ***/
 
 // Create our own dynamic string type that supports one operation: appending.
@@ -324,29 +387,36 @@ void editorDrawRows(struct abuf *ab)
     int y;
     for (y = 0; y < E.screenrows; y++)
     {
-        if (y == E.screenrows / 3)
+        if (y >= E.numrows)
         {
-            char welcome[80];
-            int welcomelen = snprintf(welcome, sizeof(welcome), "Kilo editor -- version %s", KILO_VERSION);
-            if (welcomelen > E.screencols)
-                welcomelen = E.screencols;
+            if (E.numrows == 0 && y == E.screenrows / 3)
+            {
+                char welcome[80];
+                int welcomelen = snprintf(welcome, sizeof(welcome), "🤖 Kilo text editor -- version %s -- Made by Harsh Kishorani! 🤖", KILO_VERSION);
+                if (welcomelen > E.screencols)
+                    welcomelen = E.screencols;
 
-            // Center the welcome message
-            int padding = (E.screencols - welcomelen) / 2;
-            if (padding)
+                int padding = (E.screencols - welcomelen) / 2;
+                if (padding)
+                {
+                    abAppend(ab, "~", 1);
+                    padding--;
+                }
+                while (padding--)
+                    abAppend(ab, " ", 1);
+                abAppend(ab, welcome, welcomelen);
+            }
+            else
             {
                 abAppend(ab, "~", 1);
-                padding--;
             }
-            while (padding--)
-                abAppend(ab, " ", 1);
-
-            // Display the welcome message
-            abAppend(ab, welcome, welcomelen);
         }
         else
         {
-            abAppend(ab, "~", 1);
+            int len = E.row[y].size;
+            if (len > E.screencols)
+                len = E.screencols;
+            abAppend(ab, E.row[y].chars, len);
         }
 
         /*
@@ -482,15 +552,21 @@ void initEditor()
 {
     E.cx = 0;
     E.cy = 0;
+    E.numrows = 0;
+    E.row = NULL;
 
     if (getWindowSize(&E.screenrows, &E.screencols) == -1)
         die("getWindowSize");
 }
 
-int main()
+int main(int argc, char *argv[])
 {
     enableRawMode();
     initEditor();
+    if (argc >= 2)
+    {
+        editorOpen(argv[1]);
+    }
 
     while (1)
     {
