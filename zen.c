@@ -18,7 +18,7 @@
 
 /*** defines ***/
 
-#define KILO_VERSION "0.0.1"
+#define ZEN_VERSION "0.0.1"
 
 /*
     The 'CTRL_KEY' macro bitwise-ANDs a character with the value 00011111, in binary.
@@ -392,7 +392,7 @@ void editorDrawRows(struct abuf *ab)
             if (E.numrows == 0 && y == E.screenrows / 3)
             {
                 char welcome[80];
-                int welcomelen = snprintf(welcome, sizeof(welcome), "🤖 Kilo text editor -- version %s -- Made by Harsh Kishorani! 🤖", KILO_VERSION);
+                int welcomelen = snprintf(welcome, sizeof(welcome), "🤖 Zen text editor -- version %s -- Made by Harsh Kishorani! 🤖", ZEN_VERSION);
                 if (welcomelen > E.screencols)
                     welcomelen = E.screencols;
 
