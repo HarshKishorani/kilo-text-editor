@@ -58,6 +58,8 @@ typedef struct erow
 struct editorConfig
 {
     int cx, cy; // Cursor co-ordinates
+    int rowoff; // Keep track of what row of the file the user is currently scrolled to
+    int coloff; // Keep track of what col of the file the user is currently scrolled to
     int numrows;
     erow *row;
     int screenrows;
@@ -382,12 +384,39 @@ void abFree(struct abuf *ab)
 
 /*** output ***/
 
+void editorScroll()
+{
+    // Vertical Scroll
+    //  if the cursor is above the visible window, and if so, scroll up to where the cursor is.
+    if (E.cy < E.rowoff)
+    {
+        E.rowoff = E.cy;
+    }
+    // if the cursor is past the bottom of the visible window, and contains slightly more complicated arithmetic because E.rowoff refers to what’s at the top of the screen,
+    // and we have to get E.screenrows involved to talk about what’s at the bottom of the screen.
+    if (E.cy >= E.rowoff + E.screenrows)
+    {
+        E.rowoff = E.cy - E.screenrows + 1;
+    }
+
+    // Horizontal Scroll
+    if (E.cx < E.coloff)
+    {
+        E.coloff = E.cx;
+    }
+    if (E.cx >= E.coloff + E.screencols)
+    {
+        E.coloff = E.cx - E.screencols + 1;
+    }
+}
+
 void editorDrawRows(struct abuf *ab)
 {
     int y;
     for (y = 0; y < E.screenrows; y++)
     {
-        if (y >= E.numrows)
+        int filerow = y + E.rowoff;
+        if (filerow >= E.numrows)
         {
             if (E.numrows == 0 && y == E.screenrows / 3)
             {
@@ -413,10 +442,12 @@ void editorDrawRows(struct abuf *ab)
         }
         else
         {
-            int len = E.row[y].size;
+            int len = E.row[filerow].size - E.coloff;
+            if (len < 0)
+                len = 0;
             if (len > E.screencols)
                 len = E.screencols;
-            abAppend(ab, E.row[y].chars, len);
+            abAppend(ab, &E.row[filerow].chars[E.coloff], len);
         }
 
         /*
@@ -435,6 +466,7 @@ void editorDrawRows(struct abuf *ab)
 
 void editorRefreshScreen()
 {
+    editorScroll();
     /*
         Intro to Escape Sequences. Consider an example : ("\x1b[2J", 4)
 
@@ -464,10 +496,9 @@ void editorRefreshScreen()
     editorDrawRows(&ab);
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1); // H- Command - Reposition the cursor to the desired location.
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.cx - E.coloff) + 1); // H- Command - Reposition the cursor to the desired location.
     abAppend(&ab, buf, strlen(buf));
 
-    abAppend(&ab, "\x1b[H", 3);    // Reposition it at the top-left corner so that we’re ready to draw the editor interface from top to bottom.
     abAppend(&ab, "\x1b[?25h", 6); // Reset the cursor (Display it back).
 
     write(STDOUT_FILENO, ab.b, ab.len); // Write the whole buffer onto the terminal instead of using multiple write statements.
@@ -478,6 +509,8 @@ void editorRefreshScreen()
 
 void editorMoveCursor(int key)
 {
+    erow *row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
+
     switch (key)
     {
     case ARROW_LEFT:
@@ -485,11 +518,20 @@ void editorMoveCursor(int key)
         {
             E.cx--;
         }
+        else if (E.cy > 0)
+        {
+            E.cy--;
+            E.cx = E.row[E.cy].size; // Go to end char of prev line if going left out of bound.
+        }
         break;
     case ARROW_RIGHT:
-        if (E.cx != E.screencols - 1)
+        // Only increment cursor if it's not end of the line
+        if (row && E.cx < row->size)
         {
             E.cx++;
+        }else if(row && E.cx == row->size ){
+            E.cy++;
+            E.cx = 0;
         }
         break;
     case ARROW_UP:
@@ -499,11 +541,19 @@ void editorMoveCursor(int key)
         }
         break;
     case ARROW_DOWN:
-        if (E.cy != E.screenrows - 1)
+        if (E.cy < E.numrows)
         {
             E.cy++;
         }
         break;
+    }
+
+    // Snap cursor to end of line
+    row = (E.cy >= E.numrows) ? NULL : &E.row[E.cy];
+    int rowlen = row ? row->size : 0;
+    if (E.cx > rowlen)
+    {
+        E.cx = rowlen;
     }
 }
 
@@ -552,6 +602,8 @@ void initEditor()
 {
     E.cx = 0;
     E.cy = 0;
+    E.rowoff = 0;
+    E.coloff = 0;
     E.numrows = 0;
     E.row = NULL;
 
