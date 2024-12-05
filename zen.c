@@ -19,6 +19,7 @@
 /*** defines ***/
 
 #define ZEN_VERSION "0.0.1"
+#define ZEN_TAB_STOP 4
 
 /*
     The 'CTRL_KEY' macro bitwise-ANDs a character with the value 00011111, in binary.
@@ -52,12 +53,15 @@ enum editorKey
 typedef struct erow
 {
     int size;
+    int rsize; // Contains the size of the contents of 'render'.
     char *chars;
+    char *render; // Ccntains the actual characters to draw on the screen for that row of text.
 } erow;
 
 struct editorConfig
 {
     int cx, cy; // Cursor co-ordinates
+    int rx;     // x variable index into the render field.
     int rowoff; // Keep track of what row of the file the user is currently scrolled to
     int coloff; // Keep track of what col of the file the user is currently scrolled to
     int numrows;
@@ -306,6 +310,67 @@ int getWindowSize(int *rows, int *cols)
 
 /*** row operations ***/
 
+/// @brief Converts a chars index into a render index.
+int editorRowCxToRx(erow *row, int cx)
+{
+    int rx = 0;
+    int j;
+
+    for (j = 0; j < cx; j++)
+    {
+        if (row->chars[j] == '\t')
+        {
+            /*
+                For each character, if it’s a tab we use rx % KILO_TAB_STOP to find out how many columns we are to the right of the last tab stop, 
+                and then subtract that from KILO_TAB_STOP - 1 to find out how many columns we are to the left of the next tab stop. 
+                We add that amount to rx to get just to the left of the next tab stop, and then the unconditional rx++ statement gets us right on the next tab stop.
+            */
+            rx += (ZEN_TAB_STOP - 1) - (rx % ZEN_TAB_STOP);
+        }
+        rx++;
+    }
+
+    return rx;
+}
+
+/// @brief Uses the chars string of an erow to fill in the contents of the render string.
+/// @param row
+void editorUpdateRow(erow *row)
+{
+    // Count number of tabs used in line as we will render spaces instead of tabs.
+    // Because tabs just shift the cursor.
+    int tabs = 0;
+    int j;
+    for (j = 0; j < row->size; j++)
+    {
+        if (row->chars[j] == '\t')
+            tabs++;
+    }
+
+    // Allocate memory to render.
+    free(row->render);
+    row->render = malloc(row->size + tabs * (ZEN_TAB_STOP - 1) + 1);
+    int idx = 0;
+
+    for (j = 0; j < row->size; j++)
+    {
+        // If we encounter tab
+        if (row->chars[j] == '\t')
+        {
+            // Maximum number of characters needed for each tab is ZEN_TAB_STOP.
+            row->render[idx++] = ' ';
+            while (idx % ZEN_TAB_STOP != 0)
+                row->render[idx++] = ' ';
+        }
+        else
+        {
+            row->render[idx++] = row->chars[j];
+        }
+    }
+    row->render[idx] = '\0';
+    row->rsize = idx;
+}
+
 /// @brief Allocate space for a new erow, and then copy the given string to a new erow at the end of the E.row array.
 /// @param s String to append to the row.
 /// @param len Length of the string to append.
@@ -317,6 +382,11 @@ void editorAppendRow(char *s, size_t len)
     E.row[at].chars = malloc(len + 1);
     memcpy(E.row[at].chars, s, len);
     E.row[at].chars[len] = '\0';
+
+    E.row[at].rsize = 0;
+    E.row[at].render = NULL;
+    editorUpdateRow(&E.row[at]);
+
     E.numrows++;
 }
 
@@ -386,6 +456,12 @@ void abFree(struct abuf *ab)
 
 void editorScroll()
 {
+    E.rx = 0;
+    if (E.cy < E.numrows)
+    {
+        E.rx = editorRowCxToRx(&E.row[E.cy], E.cx);
+    }
+
     // Vertical Scroll
     //  if the cursor is above the visible window, and if so, scroll up to where the cursor is.
     if (E.cy < E.rowoff)
@@ -400,13 +476,13 @@ void editorScroll()
     }
 
     // Horizontal Scroll
-    if (E.cx < E.coloff)
+    if (E.rx < E.coloff)
     {
-        E.coloff = E.cx;
+        E.coloff = E.rx;
     }
-    if (E.cx >= E.coloff + E.screencols)
+    if (E.rx >= E.coloff + E.screencols)
     {
-        E.coloff = E.cx - E.screencols + 1;
+        E.coloff = E.rx - E.screencols + 1;
     }
 }
 
@@ -442,12 +518,12 @@ void editorDrawRows(struct abuf *ab)
         }
         else
         {
-            int len = E.row[filerow].size - E.coloff;
+            int len = E.row[filerow].rsize - E.coloff;
             if (len < 0)
                 len = 0;
             if (len > E.screencols)
                 len = E.screencols;
-            abAppend(ab, &E.row[filerow].chars[E.coloff], len);
+            abAppend(ab, &E.row[filerow].render[E.coloff], len);
         }
 
         /*
@@ -496,7 +572,7 @@ void editorRefreshScreen()
     editorDrawRows(&ab);
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.cx - E.coloff) + 1); // H- Command - Reposition the cursor to the desired location.
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff) + 1); // H- Command - Reposition the cursor to the desired location.
     abAppend(&ab, buf, strlen(buf));
 
     abAppend(&ab, "\x1b[?25h", 6); // Reset the cursor (Display it back).
@@ -529,7 +605,9 @@ void editorMoveCursor(int key)
         if (row && E.cx < row->size)
         {
             E.cx++;
-        }else if(row && E.cx == row->size ){
+        }
+        else if (row && E.cx == row->size)
+        {
             E.cy++;
             E.cx = 0;
         }
@@ -602,6 +680,7 @@ void initEditor()
 {
     E.cx = 0;
     E.cy = 0;
+    E.rx = 0;
     E.rowoff = 0;
     E.coloff = 0;
     E.numrows = 0;
