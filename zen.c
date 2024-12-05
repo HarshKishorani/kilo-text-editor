@@ -6,15 +6,17 @@
 #define _BSD_SOURCE
 #define _GNU_SOURCE
 
-#include <termios.h>
-#include <unistd.h>
-#include <stdlib.h>
 #include <ctype.h>
-#include <stdio.h>
-#include <string.h>
 #include <errno.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
+#include <termios.h>
+#include <time.h>
+#include <unistd.h>
 
 /*** defines ***/
 
@@ -68,6 +70,9 @@ struct editorConfig
     erow *row;
     int screenrows;
     int screencols;
+    char *filename;
+    char statusmsg[80];
+    time_t statusmsg_time;
     struct termios orig_termios;
 };
 struct editorConfig E;
@@ -321,8 +326,8 @@ int editorRowCxToRx(erow *row, int cx)
         if (row->chars[j] == '\t')
         {
             /*
-                For each character, if it’s a tab we use rx % KILO_TAB_STOP to find out how many columns we are to the right of the last tab stop, 
-                and then subtract that from KILO_TAB_STOP - 1 to find out how many columns we are to the left of the next tab stop. 
+                For each character, if it’s a tab we use rx % ZEN_TAB_STOP to find out how many columns we are to the right of the last tab stop,
+                and then subtract that from ZEN_TAB_STOP - 1 to find out how many columns we are to the left of the next tab stop.
                 We add that amount to rx to get just to the left of the next tab stop, and then the unconditional rx++ statement gets us right on the next tab stop.
             */
             rx += (ZEN_TAB_STOP - 1) - (rx % ZEN_TAB_STOP);
@@ -395,6 +400,9 @@ void editorAppendRow(char *s, size_t len)
 /// @brief Opening and Reading a file from disk
 void editorOpen(char *filename)
 {
+    free(E.filename);
+    E.filename = strdup(filename);
+
     FILE *fp = fopen(filename, "r");
     if (!fp)
         die("fopen");
@@ -533,11 +541,57 @@ void editorDrawRows(struct abuf *ab)
         */
         abAppend(ab, "\x1b[K", 3);
 
-        if (y < E.screenrows - 1)
+        abAppend(ab, "\r\n", 2);
+    }
+}
+
+void editorDrawStatusBar(struct abuf *ab)
+{
+    /*
+        To make the status bar stand out, we’re going to display it with inverted colors: black text on a white background.
+        The escape sequence '<esc>[7m' switches to inverted colors, and '<esc>[m' switches back to normal formatting.
+
+        The m command (Select Graphic Rendition) : http://vt100.net/docs/vt100-ug/chapter3.html#SGR
+    */
+    abAppend(ab, "\x1b[7m", 4);
+
+    char status[80], rstatus[80];
+    int len = snprintf(status, sizeof(status), "%.20s - %d lines", E.filename ? E.filename : "[No Name]", E.numrows);
+
+    // Current row number.
+    int rlen = snprintf(rstatus, sizeof(rstatus), "%d/%d", E.cy + 1, E.numrows);
+
+    if (len > E.screencols)
+        len = E.screencols;
+
+    abAppend(ab, status, len);
+
+    while (len < E.screencols)
+    {
+        // Display current row number at the end of status bar.
+        if (E.screencols - len == rlen)
         {
-            abAppend(ab, "\r\n", 2);
+            abAppend(ab, rstatus, rlen);
+            break;
+        }
+        else
+        {
+            abAppend(ab, " ", 1);
+            len++;
         }
     }
+    abAppend(ab, "\x1b[m", 3);
+    abAppend(ab, "\r\n", 2);
+}
+
+void editorDrawMessageBar(struct abuf *ab)
+{
+    abAppend(ab, "\x1b[K", 3);
+    int msglen = strlen(E.statusmsg);
+    if (msglen > E.screencols)
+        msglen = E.screencols;
+    if (msglen && time(NULL) - E.statusmsg_time < 5)
+        abAppend(ab, E.statusmsg, msglen);
 }
 
 void editorRefreshScreen()
@@ -570,6 +624,8 @@ void editorRefreshScreen()
     abAppend(&ab, "\x1b[H", 3); // H Command - Reposition it at the top-left corner so that we’re ready to draw the editor interface from top to bottom.
 
     editorDrawRows(&ab);
+    editorDrawStatusBar(&ab);
+    editorDrawMessageBar(&ab);
 
     char buf[32];
     snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, (E.rx - E.coloff) + 1); // H- Command - Reposition the cursor to the desired location.
@@ -579,6 +635,22 @@ void editorRefreshScreen()
 
     write(STDOUT_FILENO, ab.b, ab.len); // Write the whole buffer onto the terminal instead of using multiple write statements.
     abFree(&ab);
+}
+
+void editorSetStatusMessage(const char *fmt, ...)
+{
+    /*
+        The ... argument makes editorSetStatusMessage() a variadic function, meaning it can take any number of arguments. 
+        C’s way of dealing with these arguments is by having you call va_start() and va_end() on a value of type va_list. 
+        The last argument before the ... (in this case, fmt) must be passed to va_start(), so that the address of the next arguments is known. 
+        Then, between the va_start() and va_end() calls, you would call va_arg() and pass it the type of the next argument (which you usually get from the given format string) and it would return the value of that argument. 
+        In this case, we pass fmt and ap to vsnprintf() and it takes care of reading the format string and calling va_arg() to get each argument.
+    */
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(E.statusmsg, sizeof(E.statusmsg), fmt, ap); // vsnprintf() helps us make our own printf()-style function
+    va_end(ap);
+    E.statusmsg_time = time(NULL); // set E.statusmsg_time to the current time
 }
 
 /*** input ***/
@@ -653,7 +725,9 @@ void editorProcessKeypress()
         E.cx = 0;
         break;
     case END_KEY:
-        E.cx = E.screencols - 1;
+        // Move to the end of the line with End
+        if (E.cy < E.numrows)
+            E.cx = E.row[E.cy].size;
         break;
 
     case PAGE_UP:
@@ -669,7 +743,7 @@ void editorProcessKeypress()
             if (E.cy > E.numrows)
                 E.cy = E.numrows;
         }
-        
+
         int times = E.screenrows;
         while (times--)
             editorMoveCursor(c == PAGE_UP ? ARROW_UP : ARROW_DOWN);
@@ -696,9 +770,14 @@ void initEditor()
     E.coloff = 0;
     E.numrows = 0;
     E.row = NULL;
+    E.filename = NULL;
+    E.statusmsg[0] = '\0';
+    E.statusmsg_time = 0;
 
     if (getWindowSize(&E.screenrows, &E.screencols) == -1)
         die("getWindowSize");
+
+    E.screenrows -= 2; // Make room for Status Bar and Status message.
 }
 
 int main(int argc, char *argv[])
@@ -709,6 +788,8 @@ int main(int argc, char *argv[])
     {
         editorOpen(argv[1]);
     }
+
+    editorSetStatusMessage("HELP: Ctrl-Q = quit");
 
     while (1)
     {
