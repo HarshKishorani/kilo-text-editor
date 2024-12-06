@@ -23,6 +23,7 @@
 
 #define ZEN_VERSION "0.0.1"
 #define ZEN_TAB_STOP 4
+#define ZEN_QUIT_TIMES 3
 
 /*
     The 'CTRL_KEY' macro bitwise-ANDs a character with the value 00011111, in binary.
@@ -804,6 +805,8 @@ void editorMoveCursor(int key)
 /// @brief Wait for a keypress, and then handle it.
 void editorProcessKeypress()
 {
+    static int quit_times = ZEN_QUIT_TIMES;
+
     int c = editorReadKey();
     switch (c)
     {
@@ -813,6 +816,14 @@ void editorProcessKeypress()
         break;
 
     case CTRL_KEY('q'):
+        if (E.dirty && quit_times > 0)
+        {
+            editorSetStatusMessage("WARNING!!! File has unsaved changes. "
+                                   "Press Ctrl-Q %d more times to quit.",
+                                   quit_times);
+            quit_times--;
+            return;
+        }
         // Clear the screen on exit
         write(STDOUT_FILENO, "\x1b[2J", 4);
         write(STDOUT_FILENO, "\x1b[H", 3);
