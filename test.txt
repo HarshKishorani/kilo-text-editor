@@ -1,7 +1,2 @@
 Hello this is Harsh Kishorani.
-This is a sample text editor.
-Harsh Is Here
-YOOOOOOOOOOOOOOOOO
-Hehheheheh THis is pretty good
-Harsh Kishorani 
-HEHEHE
+This is a sample text.
