@@ -395,6 +395,32 @@ void editorAppendRow(char *s, size_t len)
     E.numrows++;
 }
 
+void editorRowInsertChar(erow *row, int at, int c)
+{
+    if (at < 0 || at > row->size)
+        at = row->size;
+
+    row->chars = realloc(row->chars, row->size + 2);
+    memmove(&row->chars[at + 1], &row->chars[at], row->size - at + 1);
+
+    row->size++;
+
+    row->chars[at] = c;
+    editorUpdateRow(row);
+}
+
+/*** editor operations ***/
+
+void editorInsertChar(int c)
+{
+    if (E.cy == E.numrows)
+    {
+        editorAppendRow("", 0);
+    }
+    editorRowInsertChar(&E.row[E.cy], E.cx, c); // Insert the character at the cursor position.
+    E.cx++;
+}
+
 /*** file i/o ***/
 
 /// @brief Opening and Reading a file from disk
@@ -640,10 +666,10 @@ void editorRefreshScreen()
 void editorSetStatusMessage(const char *fmt, ...)
 {
     /*
-        The ... argument makes editorSetStatusMessage() a variadic function, meaning it can take any number of arguments. 
-        C’s way of dealing with these arguments is by having you call va_start() and va_end() on a value of type va_list. 
-        The last argument before the ... (in this case, fmt) must be passed to va_start(), so that the address of the next arguments is known. 
-        Then, between the va_start() and va_end() calls, you would call va_arg() and pass it the type of the next argument (which you usually get from the given format string) and it would return the value of that argument. 
+        The ... argument makes editorSetStatusMessage() a variadic function, meaning it can take any number of arguments.
+        C’s way of dealing with these arguments is by having you call va_start() and va_end() on a value of type va_list.
+        The last argument before the ... (in this case, fmt) must be passed to va_start(), so that the address of the next arguments is known.
+        Then, between the va_start() and va_end() calls, you would call va_arg() and pass it the type of the next argument (which you usually get from the given format string) and it would return the value of that argument.
         In this case, we pass fmt and ap to vsnprintf() and it takes care of reading the format string and calling va_arg() to get each argument.
     */
     va_list ap;
@@ -755,6 +781,10 @@ void editorProcessKeypress()
     case ARROW_LEFT:
     case ARROW_RIGHT:
         editorMoveCursor(c);
+        break;
+
+    default:
+        editorInsertChar(c);
         break;
     }
 }
