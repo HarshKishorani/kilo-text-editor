@@ -60,7 +60,8 @@ typedef struct erow
     int size;
     int rsize; // Contains the size of the contents of 'render'.
     char *chars;
-    char *render; // Ccntains the actual characters to draw on the screen for that row of text.
+    char *render; // Contains the actual characters to draw on the screen for that row of text.
+    unsigned char *hl; // store the highlighting of each line in an array
 } erow;
 
 struct editorConfig
@@ -406,7 +407,7 @@ void editorInsertRow(int at, char *s, size_t len)
 {
     if (at < 0 || at > E.numrows)
         return;
-        
+
     E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
     memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at));
 
@@ -437,7 +438,7 @@ void editorDelRow(int at)
 
     editorFreeRow(&E.row[at]);
     memmove(&E.row[at], &E.row[at + 1], sizeof(erow) * (E.numrows - at - 1));
-    
+
     E.numrows--;
     E.dirty++;
 }
@@ -616,7 +617,7 @@ void editorSave()
 {
     if (E.filename == NULL)
     {
-        E.filename = editorPrompt("Save as: %s (ESC to cancel)",NULL);
+        E.filename = editorPrompt("Save as: %s (ESC to cancel)", NULL);
         if (E.filename == NULL)
         {
             editorSetStatusMessage("Save aborted");
@@ -655,7 +656,7 @@ void editorSave()
 void editorFindCallback(char *query, int key)
 {
     /*
-        'last_match' will contain the index of the row that the last match was on, or -1 if there was no last match. 
+        'last_match' will contain the index of the row that the last match was on, or -1 if there was no last match.
         'direction' will store the direction of the search: 1 for searching forward, and -1 for searching backward.
     */
     static int last_match = -1;
@@ -699,7 +700,7 @@ void editorFindCallback(char *query, int key)
             current = E.numrows - 1;
         else if (current == E.numrows)
             current = 0;
-        
+
         // The row to search.
         erow *row = &E.row[current];
 
@@ -841,7 +842,22 @@ void editorDrawRows(struct abuf *ab)
                 len = 0;
             if (len > E.screencols)
                 len = E.screencols;
-            abAppend(ab, &E.row[filerow].render[E.coloff], len);
+
+            char *c = &E.row[filerow].render[E.coloff];
+            int j;
+            for (j = 0; j < len; j++)
+            {
+                if (isdigit(c[j]))
+                {
+                    abAppend(ab, "\x1b[31m", 5); // set the text color
+                    abAppend(ab, &c[j], 1);
+                    abAppend(ab, "\x1b[39m", 5); // reset the text color
+                }
+                else
+                {
+                    abAppend(ab, &c[j], 1);
+                }
+            }
         }
 
         /*
