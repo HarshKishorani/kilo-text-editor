@@ -654,20 +654,63 @@ void editorSave()
 
 void editorFindCallback(char *query, int key)
 {
+    /*
+        'last_match' will contain the index of the row that the last match was on, or -1 if there was no last match. 
+        'direction' will store the direction of the search: 1 for searching forward, and -1 for searching backward.
+    */
+    static int last_match = -1;
+    static int direction = 1;
+
     if (key == '\r' || key == '\x1b')
     {
+        last_match = -1;
+        direction = 1;
         return;
     }
+    else if (key == ARROW_RIGHT || key == ARROW_DOWN)
+    {
+        direction = 1;
+    }
+    else if (key == ARROW_LEFT || key == ARROW_UP)
+    {
+        direction = -1;
+    }
+    else
+    {
+        last_match = -1;
+        direction = 1;
+    }
+
+    if (last_match == -1)
+        direction = 1;
+
+    // 'current' is the index of the current row we are searching. We start on the last_match row.
+    int current = last_match;
+
     int i;
     for (i = 0; i < E.numrows; i++)
     {
-        erow *row = &E.row[i];
+        // If there was a last match, it starts on the line after (or before, if we’re searching backwards).
+        // If there wasn’t a last match, it starts at the top of the file and searches in the forward direction to find the first match.
+        current += direction;
+
+        // Causes current to go from the end of the file back to the beginning of the file, or vice versa, to allow a search to “wrap around” the end of a file and continue from the top (or bottom).
+        if (current == -1)
+            current = E.numrows - 1;
+        else if (current == E.numrows)
+            current = 0;
+        
+        // The row to search.
+        erow *row = &E.row[current];
 
         // check if query is a substring of the current row. It returns NULL if there is no match, otherwise it returns a pointer to the matching substring.
         char *match = strstr(row->render, query);
+
         if (match)
         {
-            E.cy = i;
+            // When we find a match, we set last_match to current, so that if the user presses the arrow keys, we’ll start the next search from that point.
+            last_match = current;
+            E.cy = current;
             E.cx = editorRowRxToCx(row, match - row->render);
             E.rowoff = E.numrows;
             break;
@@ -681,7 +724,7 @@ void editorFind()
     int saved_cy = E.cy;
     int saved_coloff = E.coloff;
     int saved_rowoff = E.rowoff;
-    char *query = editorPrompt("Search: %s (ESC to cancel)", editorFindCallback);
+    char *query = editorPrompt("Search: %s (Use ESC/Arrows/Enter)", editorFindCallback);
     if (query)
     {
         free(query);
