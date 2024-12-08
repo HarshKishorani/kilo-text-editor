@@ -55,11 +55,13 @@ enum editorKey
 enum editorHighlight
 {
     HL_NORMAL = 0,
+    HL_STRING,
     HL_NUMBER,
     HL_MATCH
 };
 
 #define HL_HIGHLIGHT_NUMBERS (1 << 0)
+#define HL_HIGHLIGHT_STRINGS (1 << 1)
 
 /*** data ***/
 
@@ -108,7 +110,7 @@ char *C_HL_extensions[] = {".c", ".h", ".cpp", NULL};
 struct editorSyntax HLDB[] = {
     {"c",
      C_HL_extensions,
-     HL_HIGHLIGHT_NUMBERS},
+     HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS},
 };
 
 #define HLDB_ENTRIES (sizeof(HLDB) / sizeof(HLDB[0]))
@@ -374,6 +376,9 @@ void editorUpdateSyntax(erow *row)
     // 'prev_sep' keeps track of whether the previous character was a separator.
     int prev_sep = 1;
 
+    // 'in_string' keeps track of whether we are currently inside a string.
+    int in_string = 0;
+
     int i = 0;
     while (i < row->rsize)
     {
@@ -382,9 +387,42 @@ void editorUpdateSyntax(erow *row)
         // 'prev_hl' is set to the highlight type of the previous character.
         unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;
 
-        // To highlight a digit with HL_NUMBER, we now require the previous character to either be a separator, or to also be highlighted with HL_NUMBER.
+        if (E.syntax->flags & HL_HIGHLIGHT_STRINGS)
+        {
+            if (in_string)
+            {
+                row->hl[i] = HL_STRING;
+
+                if (c == '\\' && i + 1 < row->rsize)
+                {
+                    row->hl[i + 1] = HL_STRING;
+                    i += 2;
+                    continue;
+                }
+
+                if (c == in_string)
+                    in_string = 0;
+
+                i++;
+                prev_sep = 1;
+                continue;
+            }
+            else
+            {
+                if (c == '"' || c == '\'')
+                {
+                    in_string = c;
+                    row->hl[i] = HL_STRING;
+
+                    i++;
+                    continue;
+                }
+            }
+        }
+
         if (E.syntax->flags & HL_HIGHLIGHT_NUMBERS)
         {
+            // To highlight a digit with HL_NUMBER, we require the previous character to either be a separator, or to also be highlighted with HL_NUMBER.
             if ((isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || (c == '.' && prev_hl == HL_NUMBER))
             {
                 // Increment i to “consume” that character, set prev_sep to 0 to indicate we are in the middle of highlighting something,
@@ -405,6 +443,8 @@ int editorSyntaxToColor(int hl)
 {
     switch (hl)
     {
+    case HL_STRING:
+        return 35;
     case HL_NUMBER:
         return 31;
     case HL_MATCH:
