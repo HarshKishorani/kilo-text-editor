@@ -55,6 +55,7 @@ enum editorKey
 enum editorHighlight
 {
     HL_NORMAL = 0,
+    HL_COMMENT,
     HL_STRING,
     HL_NUMBER,
     HL_MATCH
@@ -68,9 +69,10 @@ enum editorHighlight
 /// @brief struct that will contain all the syntax highlighting information for a particular filetype.
 struct editorSyntax
 {
-    char *filetype;   // The filetype field is the name of the filetype that will be displayed to the user in the status bar.
-    char **filematch; // filematch is an array of strings, where each string contains a pattern to match a filename against. If the filename matches, then the file will be recognized as having that filetype.
-    int flags;        // flags is a bit field that will contain flags for whether to highlight numbers and whether to highlight strings for that filetype. eg HL_HIGHLIGHT_NUMBERS
+    char *filetype;                 // The filetype field is the name of the filetype that will be displayed to the user in the status bar.
+    char **filematch;               // filematch is an array of strings, where each string contains a pattern to match a filename against. If the filename matches, then the file will be recognized as having that filetype.
+    char *singleline_comment_start; // let each language specify its own single-line comment pattern
+    int flags;                      // flags is a bit field that will contain flags for whether to highlight numbers and whether to highlight strings for that filetype. eg HL_HIGHLIGHT_NUMBERS
 };
 
 /// @brief Data type for storing a row of text in our editor.
@@ -110,6 +112,7 @@ char *C_HL_extensions[] = {".c", ".h", ".cpp", NULL};
 struct editorSyntax HLDB[] = {
     {"c",
      C_HL_extensions,
+     "//",
      HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS},
 };
 
@@ -373,6 +376,9 @@ void editorUpdateSyntax(erow *row)
     if (E.syntax == NULL)
         return;
 
+    char *scs = E.syntax->singleline_comment_start;
+    int scs_len = scs ? strlen(scs) : 0;
+
     // 'prev_sep' keeps track of whether the previous character was a separator.
     int prev_sep = 1;
 
@@ -386,6 +392,15 @@ void editorUpdateSyntax(erow *row)
 
         // 'prev_hl' is set to the highlight type of the previous character.
         unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;
+
+        if (scs_len && !in_string)
+        {
+            if (!strncmp(&row->render[i], scs, scs_len))
+            {
+                memset(&row->hl[i], HL_COMMENT, row->rsize - i);
+                break;
+            }
+        }
 
         if (E.syntax->flags & HL_HIGHLIGHT_STRINGS)
         {
@@ -443,6 +458,8 @@ int editorSyntaxToColor(int hl)
 {
     switch (hl)
     {
+    case HL_COMMENT:
+        return 36;
     case HL_STRING:
         return 35;
     case HL_NUMBER:
