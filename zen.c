@@ -55,7 +55,8 @@ enum editorKey
 enum editorHighlight
 {
     HL_NORMAL = 0,
-    HL_NUMBER
+    HL_NUMBER,
+    HL_MATCH
 };
 
 /*** data ***/
@@ -66,7 +67,7 @@ typedef struct erow
     int size;
     int rsize; // Contains the size of the contents of 'render'.
     char *chars;
-    char *render; // Contains the actual characters to draw on the screen for that row of text.
+    char *render;      // Contains the actual characters to draw on the screen for that row of text.
     unsigned char *hl; // store the highlighting of each line in an array
 } erow;
 
@@ -352,6 +353,8 @@ int editorSyntaxToColor(int hl)
     {
     case HL_NUMBER:
         return 31;
+    case HL_MATCH:
+        return 34;
     default:
         return 37;
     }
@@ -749,6 +752,9 @@ void editorFindCallback(char *query, int key)
             E.cy = current;
             E.cx = editorRowRxToCx(row, match - row->render);
             E.rowoff = E.numrows;
+
+            // match - row->render is the index into render of the match, so we use that as our index into hl.
+            memset(&row->hl[match - row->render], HL_MATCH, strlen(query));
             break;
         }
     }
