@@ -1094,7 +1094,27 @@ void editorDrawRows(struct abuf *ab)
             int j;
             for (j = 0; j < len; j++)
             {
-                if (hl[j] == HL_NORMAL)
+                if (iscntrl(c[j]))
+                {
+                    /*
+                        Using iscntrl() to check if the current character is a control character. If so, we translate it into a printable character by adding its value to '@' 
+                        (in ASCII, the capital letters of the alphabet come after the @ character), or using the '?' character if it’s not in the alphabetic range.
+                    */
+                    char sym = (c[j] <= 26) ? '@' + c[j] : '?';
+                    // Print using inverted colors
+                    abAppend(ab, "\x1b[7m", 4);
+                    abAppend(ab, &sym, 1);
+                    abAppend(ab, "\x1b[m", 3);
+
+                    // Unfortunately, <esc>[m turns off all text formatting, including colors. So let’s print the escape sequence for the current color afterwards.
+                    if (current_color != -1)
+                    {
+                        char buf[16];
+                        int clen = snprintf(buf, sizeof(buf), "\x1b[%dm", current_color);
+                        abAppend(ab, buf, clen);
+                    }
+                }
+                else if (hl[j] == HL_NORMAL)
                 {
                     if (current_color != -1)
                     {
