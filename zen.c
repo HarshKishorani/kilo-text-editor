@@ -56,6 +56,7 @@ enum editorHighlight
 {
     HL_NORMAL = 0,
     HL_COMMENT,
+    HL_MLCOMMENT,
     HL_KEYWORD1,
     HL_KEYWORD2,
     HL_STRING,
@@ -75,17 +76,21 @@ struct editorSyntax
     char **filematch;               // filematch is an array of strings, where each string contains a pattern to match a filename against. If the filename matches, then the file will be recognized as having that filetype.
     char **keywords;                // NULL-terminated array of strings, each string containing a keyword. To differentiate between the two types of keywords, terminate the second type of keywords with a pipe (|) character (also known as a vertical bar).
     char *singleline_comment_start; // let each language specify its own single-line comment pattern
-    int flags;                      // flags is a bit field that will contain flags for whether to highlight numbers and whether to highlight strings for that filetype. eg HL_HIGHLIGHT_NUMBERS
+    char *multiline_comment_start;
+    char *multiline_comment_end;
+    int flags; // flags is a bit field that will contain flags for whether to highlight numbers and whether to highlight strings for that filetype. eg HL_HIGHLIGHT_NUMBERS
 };
 
 /// @brief Data type for storing a row of text in our editor.
 typedef struct erow
 {
+    int idx; // erow knows its own index within the file.
     int size;
     int rsize; // Contains the size of the contents of 'render'.
     char *chars;
     char *render;      // Contains the actual characters to draw on the screen for that row of text.
     unsigned char *hl; // store the highlighting of each line in an array
+    int hl_open_comment;
 } erow;
 
 struct editorConfig
@@ -122,7 +127,7 @@ struct editorSyntax HLDB[] = {
     {"c",
      C_HL_extensions,
      C_HL_keywords,
-     "//",
+     "//", "/*", "*/",
      HL_HIGHLIGHT_NUMBERS | HL_HIGHLIGHT_STRINGS},
 };
 
@@ -388,14 +393,24 @@ void editorUpdateSyntax(erow *row)
 
     char **keywords = E.syntax->keywords;
 
+    // Single line and multi line comments.
     char *scs = E.syntax->singleline_comment_start;
+    char *mcs = E.syntax->multiline_comment_start;
+    char *mce = E.syntax->multiline_comment_end;
+
     int scs_len = scs ? strlen(scs) : 0;
+    int mcs_len = mcs ? strlen(mcs) : 0;
+    int mce_len = mce ? strlen(mce) : 0;
 
     // 'prev_sep' keeps track of whether the previous character was a separator.
     int prev_sep = 1;
 
     // 'in_string' keeps track of whether we are currently inside a string.
     int in_string = 0;
+
+    // boolean variable to keep track of whether we’re currently inside a multi-line comment (this variable isn’t used for single-line comments).
+    // we initialize in_comment to true if the previous row has an unclosed multi-line comment. If that’s the case, then the current row will start out being highlighted as a multi-line comment.
+    int in_comment = (row->idx > 0 && E.row[row->idx - 1].hl_open_comment);
 
     int i = 0;
     while (i < row->rsize)
@@ -405,12 +420,41 @@ void editorUpdateSyntax(erow *row)
         // 'prev_hl' is set to the highlight type of the previous character.
         unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;
 
-        if (scs_len && !in_string)
+        if (scs_len && !in_string && !in_comment)
         {
             if (!strncmp(&row->render[i], scs, scs_len))
             {
                 memset(&row->hl[i], HL_COMMENT, row->rsize - i);
                 break;
+            }
+        }
+
+        if (mcs_len && mce_len && !in_string)
+        {
+            if (in_comment)
+            {
+                row->hl[i] = HL_MLCOMMENT;
+                // If comment ends
+                if (!strncmp(&row->render[i], mce, mce_len))
+                {
+                    memset(&row->hl[i], HL_MLCOMMENT, mce_len);
+                    i += mce_len;
+                    in_comment = 0;
+                    prev_sep = 1;
+                    continue;
+                }
+                else
+                {
+                    i++;
+                    continue;
+                }
+            }
+            else if (!strncmp(&row->render[i], mcs, mcs_len))
+            {
+                memset(&row->hl[i], HL_MLCOMMENT, mcs_len);
+                i += mcs_len;
+                in_comment = 1;
+                continue;
             }
         }
 
@@ -488,12 +532,21 @@ void editorUpdateSyntax(erow *row)
         prev_sep = is_separator(c);
         i++;
     }
+    int changed = (row->hl_open_comment != in_comment);
+    row->hl_open_comment = in_comment; // set the value of the current row’s hl_open_comment to whatever state in_comment got left in after processing the entire row.
+
+    // updating the syntax of the next lines in the file
+    if (changed && row->idx + 1 < E.numrows)
+    {
+        editorUpdateSyntax(&E.row[row->idx + 1]);
+    }
 }
 
 int editorSyntaxToColor(int hl)
 {
     switch (hl)
     {
+    case HL_MLCOMMENT:
     case HL_COMMENT:
         return 36;
     case HL_KEYWORD1:
@@ -635,6 +688,13 @@ void editorInsertRow(int at, char *s, size_t len)
 
     E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
     memmove(&E.row[at + 1], &E.row[at], sizeof(erow) * (E.numrows - at));
+    // update the idx of each row whenever a row is inserted into the file.
+    for (int j = at + 1; j <= E.numrows; j++)
+    {
+        E.row[j].idx++;
+    }
+
+    E.row[at].idx = at;
 
     E.row[at].size = len;
     E.row[at].chars = malloc(len + 1);
@@ -643,6 +703,8 @@ void editorInsertRow(int at, char *s, size_t len)
 
     E.row[at].rsize = 0;
     E.row[at].render = NULL;
+    E.row[at].hl = NULL;
+    E.row[at].hl_open_comment = 0;
     editorUpdateRow(&E.row[at]);
 
     E.numrows++;
@@ -663,6 +725,11 @@ void editorDelRow(int at)
 
     editorFreeRow(&E.row[at]);
     memmove(&E.row[at], &E.row[at + 1], sizeof(erow) * (E.numrows - at - 1));
+    // update the idx of each row whenever a row is removed from the file.
+    for (int j = at; j < E.numrows - 1; j++)
+    {
+        E.row[j].idx--;
+    }
 
     E.numrows--;
     E.dirty++;
@@ -1097,7 +1164,7 @@ void editorDrawRows(struct abuf *ab)
                 if (iscntrl(c[j]))
                 {
                     /*
-                        Using iscntrl() to check if the current character is a control character. If so, we translate it into a printable character by adding its value to '@' 
+                        Using iscntrl() to check if the current character is a control character. If so, we translate it into a printable character by adding its value to '@'
                         (in ASCII, the capital letters of the alphabet come after the @ character), or using the '?' character if it’s not in the alphabetic range.
                     */
                     char sym = (c[j] <= 26) ? '@' + c[j] : '?';
