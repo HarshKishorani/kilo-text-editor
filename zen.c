@@ -333,17 +333,41 @@ int getWindowSize(int *rows, int *cols)
 
 /*** syntax highlighting ***/
 
+/// @brief Takes a character and returns true if it’s considered a separator character.
+int is_separator(int c)
+{
+    return isspace(c) || c == '\0' || strchr(",.()+-/*=~%<>[];", c) != NULL;
+}
+
 void editorUpdateSyntax(erow *row)
 {
     row->hl = realloc(row->hl, row->rsize);
     memset(row->hl, HL_NORMAL, row->rsize);
-    int i;
-    for (i = 0; i < row->rsize; i++)
+
+    // 'prev_sep' keeps track of whether the previous character was a separator.
+    int prev_sep = 1;
+
+    int i = 0;
+    while (i < row->rsize)
     {
-        if (isdigit(row->render[i]))
+        char c = row->render[i];
+
+        // 'prev_hl' is set to the highlight type of the previous character.
+        unsigned char prev_hl = (i > 0) ? row->hl[i - 1] : HL_NORMAL;
+
+        // To highlight a digit with HL_NUMBER, we now require the previous character to either be a separator, or to also be highlighted with HL_NUMBER.
+        if ((isdigit(c) && (prev_sep || prev_hl == HL_NUMBER)) || (c == '.' && prev_hl == HL_NUMBER))
         {
+            // Increment i to “consume” that character, set prev_sep to 0 to indicate we are in the middle of highlighting something,
+            // and then continue the loop.
             row->hl[i] = HL_NUMBER;
+            i++;
+            prev_sep = 0;
+            continue;
         }
+
+        prev_sep = is_separator(c);
+        i++;
     }
 }
 
