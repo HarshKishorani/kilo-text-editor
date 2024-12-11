@@ -101,5 +101,4 @@ This project is open-source and available under the [MIT License](LICENSE).
 
 ## Acknowledgements
 
-- Inspired by [Kilo Text Editor](https://viewsourcecode.org/snaptoken/kilo/).
 - Made with ❤️ by Harsh Kishorani. 
